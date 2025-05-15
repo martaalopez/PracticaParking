@@ -1,9 +1,11 @@
-from ultralytics import YOLO
+# from ultralytics import YOLO
 import cv2
 import datetime
 import numpy as np
 import json
+from ultralytics import YOLO  
 
+# Cargar el modelo YOLO
 model = YOLO('yolov8m.pt')
 
 class ParkingSystem:
@@ -17,9 +19,6 @@ class ParkingSystem:
         self.historial = {}
         self.coches_movimiento = 0
         self.eventos = []
-
-
-        self.tiempo_promedio = 0
         self.tiempos = []
 
     def actualizar(self, frame, tracker):
@@ -51,28 +50,22 @@ class ParkingSystem:
                             self.coches_en_parking.add(id)
                             self.tiempos_cruce[id] = (current_time, None)
                             self.eventos.append({
-            "id": id,
-            "tipo": "entrada",
-            "hora": current_time.isoformat()
-        })
+                                "id": id,
+                                "tipo": "entrada",
+                                "hora": current_time.isoformat()
+                            })
                             cv2.putText(frame, "ENTRADA", (int(x), int(y)-15), 
                                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-                    elif delta_y < 0:
-                        if id in self.coches_en_parking:
+                    elif delta_y <= 0:    
+                        if id in self.coches_en_parking:  
                             self.salidas += 1
                             self.coches_en_parking.remove(id)
-                            entrada_time, _ = self.tiempos_cruce.get(id, (None, None))
-                            if entrada_time:
-                                tiempo_estancia = (current_time - entrada_time).total_seconds()
-                                self.tiempos.append(tiempo_estancia)
-                                self.tiempo_promedio = sum(self.tiempos) / len(self.tiempos) if self.tiempos else 0
-                                self.tiempos_cruce[id] = (entrada_time, current_time)
-                                self.eventos.append({
-                "id": id,
-                "tipo": "salida",
-                "hora": current_time.isoformat(),
-                "tiempo_estancia": tiempo_estancia
-            })
+                            self.tiempos_cruce[id] = (current_time)
+                            self.eventos.append({
+                                "id": id,
+                                "tipo": "salida",
+                                "hora": current_time.isoformat()
+                            })
                             cv2.putText(frame, "SALIDA", (int(x), int(y)-15), 
                                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
 
@@ -80,8 +73,9 @@ class ParkingSystem:
         self.coches_en_parking = {id for id in self.coches_en_parking if id in ids_actuales}
         self.historial = {k: v for k, v in self.historial.items() if k in ids_actuales}
 
-        self._mostrar_info(frame,tracker)
-    def _mostrar_info(self, frame,tracker):
+        self._mostrar_info(frame, tracker)
+
+    def _mostrar_info(self, frame, tracker):
         alto, ancho, _ = frame.shape
         cv2.rectangle(frame, (0, alto - 150), (400, alto), (40, 40, 40), -1)
 
@@ -93,7 +87,6 @@ class ParkingSystem:
             f"PLAZAS LIBRES: {plazas_libres}/{self.total_plazas}",
             f"TOTAL ENTRADAS: {self.entradas}",
             f"TOTAL SALIDAS: {self.salidas}",
-            f"TIEMPO PROMEDIO: {self.tiempo_promedio:.2f} segs"
         ]
 
         for i, texto in enumerate(info_base):
@@ -103,56 +96,48 @@ class ParkingSystem:
         cv2.line(frame, self.linea_conteo[0], self.linea_conteo[1], (0, 255, 255), 2)
 
 
-# Configuración
-video_path = './R192_168_12_253_80_CH01_19_49_54.webm'
+
+# --- CONFIGURACIÓN DE FUENTE DE VIDEO ---
+# Opción 1: Video en vivo desde la cámara RTSP cenital
+#rtsp_url = "rtsp://admin:IESgc14!@192.168.12.253:554"
+#cap = cv2.VideoCapture(rtsp_url, cv2.CAP_FFMPEG)
+#if not cap.isOpened():
+ #   raise Exception("Error: No se pudo conectar a la cámara. Verifica la URL RTSP.")
+
+# Opción 2: Video desde archivo local (solo si deseas probar sin cámara)
+video_path = './R192_168_12_253_80_CH01_16_36_01.webm'
 cap = cv2.VideoCapture(video_path)
-parking = ParkingSystem(linea_conteo=((700, 50), (850, 50)))
+
+parking = ParkingSystem(linea_conteo=((650, 30), (900, 30)))
 
 while True:
-    start = datetime.datetime.now()  # Contador de tiempo para los FPS - Tiempos Inicial
-    
-    ret, frame = cap.read()  # Lee cada frame del video
+    start = datetime.datetime.now()
+
+    ret, frame = cap.read()
     if not ret:
         break
-     # Crear una máscara triangular para desenfocar la esquina superior izquierda
+
     alto, ancho, _ = frame.shape
     mask = np.zeros((alto, ancho), dtype=np.uint8)
-
-    # Coordenadas del triángulo (superior izquierda)
-    pts = np.array([[0, 0], [ancho // 2, 0], [0, alto // 2]], np.int32)
-    pts = pts.reshape((-1, 1, 2))
-
-    # Dibujar el triángulo en la máscara
+    pts = np.array([[0, 0], [ancho // 2, 0], [0, alto // 2]], np.int32).reshape((-1, 1, 2))
     cv2.fillPoly(mask, [pts], 255)
 
-    # Aplicar el desenfoque a toda la imagen
     frame_blur = cv2.GaussianBlur(frame, (51, 51), 0)
-
-    # Aplicar la máscara: mantener la región desenfocada solo en la esquina superior izquierda
     frame[mask == 255] = frame_blur[mask == 255]
-    
-    resultado = model.track(frame, persist=True)  # Detecta los objetos y hace el track
-    
-    # Llamar a la función de actualización para registrar las entradas y salidas de coches
+
+    resultado = model.track(frame)
     parking.actualizar(frame, resultado)
 
-    
-    # Calcular los FPS
-    end = datetime.datetime.now()  # Contador de tiempo para los FPS - Tiempo Final
-    fps = f"FPS: {1 / (end - start).total_seconds():.2f}"  # Calculo los FPS
-    cv2.putText(frame, fps, (10, 25), 1, 1, (0, 0, 255), 2)  # Muestro en pantalla los FPS
-    
-    # Mostrar el resultado en la ventana
-    cv2.imshow('Video', resultado[0].plot(line_width=1))  # Muestra la visualización del resultado del track
+    end = datetime.datetime.now()
+    fps = f"FPS: {1 / (end - start).total_seconds():.2f}"
+    cv2.putText(frame, fps, (10, 25), 1, 1, (0, 0, 255), 2)
 
-    if cv2.waitKey(1) == 27:  # Método para salir del bucle al pulsar ESC
+    cv2.imshow('Video', resultado[0].plot(line_width=1))
+    if cv2.waitKey(1) == 27:
         break
+
 with open("eventos_parking.json", "w") as f:
     json.dump(parking.eventos, f, indent=4)
 
 cap.release()
 cv2.destroyAllWindows()
-
-
-
-
